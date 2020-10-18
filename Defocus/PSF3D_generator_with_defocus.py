@@ -15,21 +15,21 @@ import matplotlib.pyplot as plt
 um = 1.0
 mm = 1000*um
 
-Npixels = 256 # Pixels in x,y
+Npixels = 128 # Pixels in x,y
 assert Npixels%2 == 0 # Npixels must be even 
 
-n = 1 # refractive index
+n = 1.33 # refractive index
 
 wavelength = 0.520*um 
 
-NA = 0.14
+NA = 0.3
 
 dr = 0.25 * um # spatial sampling in xy
-dz = 2 * um
+dz = 0.5* um
 
-N = 4 # Zernike radial order
+N = 0 # Zernike radial order
 M = 0 # Zernike azimutal frequency
-weight = 1.0 # weight of the Zernike abberration weight=1 means a wavefront error of lambda
+weight = 0.0 # weight of the Zernike abberration weight=1 means a wavefront error of lambda
 
 SaveData = 'True'
 
@@ -43,9 +43,11 @@ DeltaXY = wavelength/2/NA # Diffraction limited transverse resolution
 DeltaZ = wavelength/n/(1-np.sqrt(1-NA**2/n**2)) # Diffraction limited axial resolution
 # DeltaZ = 2*n*wavelength/NA**2 # Fresnel approximation
 
-# z position to be used: the range is 4 times the axial resolution
-Nz = int(4*DeltaZ//dz)
-zs = np.linspace(-2*DeltaZ, 2*DeltaZ, Nz)
+# z positions to be used: the range is z_extent_ratio times the depth of field
+z_extent_ratio = 4
+Nz = int(z_extent_ratio*DeltaZ/dz)
+#Nz=Npixels-1
+zs = dz * (np.arange(Nz) - Nz // 2)
 
 # generate the k-space
 kx_lin = fftshift(fftfreq(Npixels, dr))
@@ -73,6 +75,9 @@ evanescent_idx = (k_rho >= k) # indexes of the evanescent waves (kz is NaN for t
 # evanescent_idx = np.isnan(kz)
                     
 PSF3D = np.zeros(((Nz,Npixels-1,Npixels-1)))
+
+intensities = np.zeros(Nz) 
+# a constant value of intensities for every z, is an indicator that the simulation is correct.
     
 for idx,z in enumerate(zs):
    
@@ -92,28 +97,7 @@ for idx,z in enumerate(zs):
     
     PSF3D[idx,:,:] = PSF
     
-    if idx%50 == 0:
-        fig, ax = plt.subplots(1, 2, figsize=(9, 5), tight_layout=False)
-        fig.suptitle(f'Zernike coefficient ({N},{M}):{weight}, z={z:.2f}$\mu$m')
-        
-        im0=ax[0].imshow(np.angle(ATF), 
-                         cmap='gray',
-                         extent = [np.amin(kx),np.amax(kx),np.amin(ky),np.amax(ky)],
-                         origin = 'lower'
-                         )
-        ax[0].set_xlabel('kx (1/$\mu$m)')
-        ax[0].set_ylabel('ky (1/$\mu$m)')
-        ax[0].set_title('Pupil (phase)')
-        fig.colorbar(im0,ax = ax[0])
-        
-        im1=ax[1].imshow(PSF,
-                         cmap='gray',
-                         extent = [np.amin(x)+dr,np.amax(x),np.amin(y)+dr,np.amax(y)],
-                         origin = 'lower'
-                         )
-        ax[1].set_xlabel('x ($\mu$m)')
-        ax[1].set_ylabel('y ($\mu$m)')
-        ax[1].set_title('PSF')
+    intensities[idx] = np.sum(PSF) 
       
 print('The numerical aperture of the system is:', NA) 
 print('The transverse resolution is:', DeltaXY ,'um') 
@@ -122,10 +106,49 @@ print('The axial resolution is:', 2*n*wavelength/NA**2 ,'um, with Fresnel approx
 print('The pixel size is:', dr ,'um') 
 print('The voxel depth is:', dz ,'um') 
 
+# %% figure 1
+fig1, ax = plt.subplots(1, 2, figsize=(9, 5), tight_layout=False)
+fig1.suptitle(f'Zernike coefficient ({N},{M}):{weight}, z={z:.2f}$\mu$m')
+
+im0=ax[0].imshow(np.angle(ATF), 
+                 cmap='gray',
+                 extent = [np.amin(kx),np.amax(kx),np.amin(ky),np.amax(ky)],
+                 origin = 'lower'
+                 )
+ax[0].set_xlabel('kx (1/$\mu$m)')
+ax[0].set_ylabel('ky (1/$\mu$m)')
+ax[0].set_title('Pupil (phase)')
+fig1.colorbar(im0,ax = ax[0])
+im1=ax[1].imshow(PSF,
+                 cmap='gray',
+                 extent = [np.amin(x)+dr,np.amax(x),np.amin(y)+dr,np.amax(y)],
+                 origin = 'lower'
+                 )
+ax[1].set_xlabel('x ($\mu$m)')
+ax[1].set_ylabel('y ($\mu$m)')
+ax[1].set_title('PSF')
+
+# %% figure 2
+plane_y = round(Npixels/2)
+plane_z = round(Nz/2)
+
+fig2, axs = plt.subplots(1, 2, figsize=(9, 5), tight_layout=False)
+axs[0].set_title('|PSF(x,y,0)|')  
+axs[0].set(xlabel = 'x ($\mu$m)')
+axs[0].set(ylabel = 'y ($\mu$m)')
+axs[0].imshow(PSF3D[plane_z,:,:], extent = [np.amin(x)+dr,np.amax(x),np.amin(y)+dr,np.amax(y)])
+
+
+axs[1].set_title('|PSF(x,0,z)|')  
+axs[1].set(xlabel = 'x ($\mu$m)')
+axs[1].set(ylabel = 'z ($\mu$m)')
+axs[1].imshow(PSF3D[:,plane_y,:], extent = [np.amin(x)+dr,np.amax(x),np.amin(zs),np.amax(zs)])
+
+
 if SaveData:
     
     if N !=0 or M != 0:
-        note = f'aberratted_n{N}-m{M}_w{weight}'
+        note = f'aberratted_n{N}_m{M}_w{weight:.2f}'
     else: note = None
     
     basename = 'psf'

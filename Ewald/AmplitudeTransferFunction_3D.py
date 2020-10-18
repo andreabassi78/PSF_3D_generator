@@ -12,7 +12,7 @@ class amplitude_transfer_function(object):
     Generare an Amplitude Transfer Function (or Coherent Transfer function) from an Ewald sphere,
     projecting a 2D pupil on the sphere
     '''
-    def __init__(self, N = 256, K_xyz_extent = 2.0, n = 1.0):
+    def __init__(self, N = 256, kmin = -1.0, kmax = 1.0, n = 1.0):
         '''
         Constructor.
         Creates a space KX,KY,KZ. 
@@ -27,17 +27,16 @@ class amplitude_transfer_function(object):
         '''
         self.N = N
         self.n = n
-        self.K_xyz_amplitude = K_xyz_extent # half length of the axes Kx,Ky,Kz
         self.values = np.zeros((N,N,N), dtype = np.complex)     
-        kx = ky = kz = np.linspace(-K_xyz_extent,K_xyz_extent, N)
+        kx = ky = kz = np.linspace(kmin,kmax, N)
         self.KX, self.KY, self.KZ = np.meshgrid(kx,ky,kz)     
         self.dK = kx[1]-kx[0] #sampling, in K space
-        x = y = z = np.fft.fftfreq(self.N, self.dK)
+        xyz= np.fft.fftfreq(self.N, self.dK)
         
-        self.dr = x[1]-x[0]    # spatial sampling, in real space.
+        self.dr = xyz[1]-xyz[0]    # spatial sampling, in real space.
         
-        self.rmin = min(x)
-        self.rmax = max(x)
+        self.rmin = min(xyz)
+        self.rmax = max(xyz)
         self.microscope_type = None
         
         

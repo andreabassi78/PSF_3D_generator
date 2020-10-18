@@ -8,7 +8,7 @@ Creates a 3D PSF starting from the Edward sphere
 """
 
 import numpy as np 
-from numpy.fft import fftn, ifftn, fftshift, ifftshift
+from numpy.fft import fftn, ifftn, fftshift, ifftshift, fftfreq
 import matplotlib.pyplot as plt
 from AmplitudeTransferFunction_3D import amplitude_transfer_function
 
@@ -21,7 +21,8 @@ assert N%2 == 0 # N must be even
 n = 1.33     # refractive index
 NA = 1.1 # numerical aperture
 wavelength = 0.520 * um
-K = n / wavelength
+
+dr = 0.1 * um # spatial sampling in xyz
 
 SaveData = 'False'
 
@@ -31,19 +32,40 @@ Detection_Mode = 'standard'
 Microscope_Type = 'widefield'
 # choose between: 'widefield', 'gaussian', 'bessel', 'SIM', 'STED', 'aberrated' 
 
+waist = 1.5 * um
+
 if Microscope_Type == 'gaussian':
-    waist = 1.5 * um
     effectiveNA = wavelength/np.pi/waist
-    print ('effective NA:', effectiveNA)
 else: effectiveNA = NA
 
-Kextent = 2*K  # extent of the k-space
+
+# %% Start calculation
+
+K = n/wavelength # wavenumber
+
+k_cut_off = NA/wavelength # cut off frequency in the coherent case
+
+DeltaXY = wavelength/2/NA # Diffraction limited transverse resolution
+DeltaZ = wavelength/n/(1-np.sqrt(1-NA**2/n**2)) # Diffraction limited axial resolution
+# DeltaZ = 2*n*wavelength/NA**2 # Fresnel approximation
+
+# generate the k-space
+kx_lin = kylin = kzlin = fftshift(fftfreq(N, dr))
+Kmin=min(kx_lin)
+Kmax=max(kx_lin)
+
+if K > Kmax:
+    raise ValueError('k-frequencies not allowed, try reducing the voxel size dr')
+
+dk = kx_lin[1]-kx_lin[0]
+
 
 #%% generate the Amplitude Transfer Function (also called Coherent Transfer Function)
-H = amplitude_transfer_function(N, -Kextent, Kextent, n)
+H = amplitude_transfer_function(N, Kmin, Kmax, n)
 H.create_ewald_sphere(K)
 H.set_numerical_aperture(NA, Detection_Mode)
 H.set_microscope_type(NA, Microscope_Type, effectiveNA/NA)
+
 
 # calculate the Spread and Transfer Function
 ATF = H.values # 3D Amplitude Transfer Function
@@ -62,7 +84,6 @@ epsilon = 1e-9 # to avoid calculating log 0 later
 ATF_show = np.rot90( ( np.abs(ATF[plane,:,:]) ) )
 ASF_show = np.rot90( ( np.abs(ASF[plane,:,:]) ) )
 PSF_show = np.rot90( ( np.abs(PSF[plane,:,:]) ) )
-#OTF_show = np.rot90( 10*np.log10 ( np.abs(OTF[plane,:,:]) + epsilon ) ) 
 OTF_show = np.rot90( ( np.abs(OTF[plane,:,:]) ) ) 
 
 # set font size
@@ -84,7 +105,7 @@ axs[0,0].imshow(ASF_show, extent=[rmin,rmax,rmin,rmax])
 # create subplot:
 axs[0,1].set_title("|ATF($k_x$,0,$k_z$)|") 
 axs[0,1].set(ylabel = '$k_z$ (1/$\mu$m)')
-axs[0,1].imshow(ATF_show, extent=[-Kextent,Kextent,-Kextent,Kextent])
+axs[0,1].imshow(ATF_show, extent=[Kmin,Kmax,Kmin,Kmax])
 
 # create subplot:
 axs[1,0].set_title('|PSF(x,0,z)|')  
@@ -96,26 +117,14 @@ axs[1,0].imshow(PSF_show, extent=[rmin,rmax,rmin,rmax])
 axs[1,1].set_title('log|OTF($k_x$,0,$k_z$)|')  
 axs[1,1].set(xlabel = '$k_x$ (1/$\mu$m)')
 axs[1,1].set(ylabel = '$k_z$ (1/$\mu$m)')
-axs[1,1].imshow(OTF_show, extent=[-Kextent,Kextent,-Kextent,Kextent])
+axs[1,1].imshow(OTF_show, extent=[Kmin,Kmax,Kmin,Kmax])
 
-
-# # zoom in:
-# for i in (0,1): 
-#     for j in (0,1):
-#         if j == 1:
-#             zoom_factor = Kextent/K/2
-#         else:
-#             zoom_factor = Kextent/K
-#         axs[i,j].xaxis.zoom(zoom_factor) 
-#         axs[i,j].yaxis.zoom(zoom_factor)
-        
-    
 # finally, render the figures
-
 plt.show()    
 
 print('The numerical aperture of the system is:', effectiveNA) 
 print('The transverse resolution is:', wavelength/2/effectiveNA ,'um') 
+
 if Detection_Mode == 'standard':
     print('The axial resolution is:', wavelength/n/(1-np.sqrt(1-effectiveNA**2/n**2)) ,'um') 
     print('The axial resolution is:', 2*n*wavelength/effectiveNA**2 ,'um, with Fresnel approximation') 
@@ -128,5 +137,5 @@ if SaveData:
     psf16 = ( psf16 * (2**16-1) / np.amax(psf16) ).astype('uint16') #normalize and convert to 16 bit
     psf16.shape = 1, N-1, 1, N-1, N-1, 1 # dimensions in TZCYXS order
     sampling = voxel_size
-    tif.imsave(f'Ewald0_NA{NA}_n{n}.tif', psf16, imagej=True, resolution = (1.0/sampling, 1.0/sampling),
+    tif.imsave(f'Ewald_NA{effectiveNA}_n{n}.tif', psf16, imagej=True, resolution = (1.0/sampling, 1.0/sampling),
                 metadata={'spacing': sampling, 'unit': 'um'})
