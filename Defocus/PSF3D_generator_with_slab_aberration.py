@@ -1,52 +1,48 @@
 # -*- coding: utf-8 -*-
 """
-Created on Fri Oct 16 11:00:29 2020
+Created on Tue Feb 23 17:02:23 2021
 
-Creates a 3D PSF starting from an abberrated pupil (with Zernike Polynomials)
+Creates a 3D PSF aberrated by the presence of a slab with 
 
 @author: Andrea Bassi
 """
 
 import numpy as np
-from zernike_polynomials import nm_polynomial
 from numpy.fft import ifft2, ifftshift, fftshift, fftfreq
 import matplotlib.pyplot as plt
 
 um = 1.0
-mm = 1000*um
+mm = 1000 * um
 
-Npixels = 256 # Pixels in x,y
-assert Npixels%2 == 0 # Npixels must be even 
+Npixels = 128 # Pixels in x,y
+assert Npixels % 2 == 0 # Npixels must be even 
 
-n = 1.33 # refractive index
+n0 = 1.33 # refractive index of the medium
+n1 = 1.47 # refractive index of the slab
+thickness = 5000 * um # slab thickness
 
-wavelength = 0.520*um 
+wavelength = 0.518 * um 
 
 NA = 0.3
 
-dr = 0.1629073 * um # spatial sampling in xy
-dz = 0.1629073* um
-
-N = 0 # Zernike radial order
-M = 0 # Zernike azimutal frequency
-weight = 0.0 # weight of the Zernike abberration weight=1 means a wavefront error of lambda
-
 SaveData = False
 
-# %% Start calculation
+# %% generate the spatial frequencies to propagate
 
-k = n/wavelength # wavenumber
+DeltaXY = wavelength/2/NA # Diffraction limited transverse resolution
+
+DeltaZ = wavelength/n0/(1-np.sqrt(1-NA**2/n0**2)) # Diffraction limited axial resolution
+
+dr =  DeltaXY/4 # spatial sampling in xy, chosen to be 1/8 of the resolution
+ratio = 4
+dz = ratio * dr # spatial sampling in z
+
+k = n0/wavelength # wavenumber
 
 k_cut_off = NA/wavelength # cut off frequency in the coherent case
 
-DeltaXY = wavelength/2/NA # Diffraction limited transverse resolution
-DeltaZ = wavelength/n/(1-np.sqrt(1-NA**2/n**2)) # Diffraction limited axial resolution
-# DeltaZ = 2*n*wavelength/NA**2 # Fresnel approximation
-
 # z positions to be used: the range is z_extent_ratio times the depth of field
-z_extent_ratio = 4
-Nz = int(z_extent_ratio*DeltaZ/dz)
-# Nz=Npixels-1 # Nz can be chosen to have any value
+Nz= Npixels-1 # Nz can be chosen to have any value
 zs = dz * (np.arange(Nz) - Nz // 2)
 
 # generate the k-space
@@ -62,28 +58,45 @@ x = y = dr * (np.arange(Npixels) - Npixels // 2)
 #x = y = fftshift(fftfreq(Npixels, dk))
 
 # k-space in radial coordinates
-k_rho = np.sqrt(kx**2 + ky**2)
-k_theta = np.arctan2(ky,kx)
+with np.errstate(invalid='ignore'):    
+    k_rho = np.sqrt(kx**2 + ky**2)
+    k_theta = np.arctan2(ky,kx)  
+    kz = np.sqrt(k**2-k_rho**2)
 
-# create a Zernike Polynomial to insert abberrations
-phase = np.pi* nm_polynomial(N, M, k_rho/k_cut_off, k_theta, normalized = False) 
+# %% calculate the effect of the slab from here:"""
+theta0 = np.arcsin(NA/n0)
+theta1 = np.arcsin(NA/n1)
+# this is the displacement of the focus point calculated by ray-tracing 
+delta = thickness * (1- np.tan(theta1)/np.tan(theta0)) 
 
-ATF0 = np.exp (1.j * weight * phase) # Amplitude Transfer Function
-kz = np.sqrt(k**2-k_rho**2)
+k1 = n1/n0 * k
+# note that in the slab k_rho remains the same, in agreement with Snell's law
+with np.errstate(invalid='ignore'):
+    kz1 = np.sqrt( (k1)**2 - k_rho**2 ) 
 
-evanescent_idx = (k_rho >= k) # indexes of the evanescent waves (kz is NaN for these indexes)
+# additional phase due to propagation in the slab
+phase = 2*np.pi * (kz1 * thickness - kz * thickness) 
+
+# Fresnel approximation
+# phase = 2* np.pi * thickness * ( k1 * (1-k_rho**2/2/k1**2) - k * (1-k_rho**2/2/k**2) )
+
+# correct for defocus, to recenter the PSF in z==0 (the new ray-tracing focus point)
+phase +=  2*np.pi * kz * delta
+
+# %% generate the pupil and the transfer functions """
+
+ATF0 = np.exp( 1.j*phase) # Amplitude Transfer Function (pupil)
+evanescent_idx = (k_rho >= k_cut_off) # indexes of the evanescent waves (kz is NaN for these indexes)
 # evanescent_idx = np.isnan(kz)
+ATF0[evanescent_idx] = 0 # exclude evanescent k
                     
 PSF3D = np.zeros(((Nz,Npixels-1,Npixels-1)))
 
-intensities = np.zeros(Nz) 
-# a constant value of intensities for every z, is an indicator that the simulation is correct.
-    
 for idx,z in enumerate(zs):
    
     angular_spectrum_propagator = np.exp(1.j*2*np.pi*kz*z)
     
-    angular_spectrum_propagator[evanescent_idx] = 0 # exclude evanescent k
+    angular_spectrum_propagator[evanescent_idx] = 0 
     
     ATF = ATF0 * angular_spectrum_propagator
 
@@ -97,20 +110,19 @@ for idx,z in enumerate(zs):
     
     PSF3D[idx,:,:] = PSF
     
-    intensities[idx] = np.sum(PSF) 
       
 print('The numerical aperture of the system is:', NA) 
 print('The transverse resolution is:', DeltaXY ,'um') 
 print('The axial resolution is:', DeltaZ ,'um') 
-print('The axial resolution is:', 2*n*wavelength/NA**2 ,'um, with Fresnel approximation') 
 print('The pixel size is:', dr ,'um') 
 print('The voxel depth is:', dz ,'um') 
+print(f'The displacement from focus is: {delta} um')
 
 # %% figure 1
 fig1, ax = plt.subplots(1, 2, figsize=(9, 5), tight_layout=False)
-fig1.suptitle(f'Zernike coefficient ({N},{M}):{weight}, z={z:.2f}$\mu$m')
+fig1.suptitle(f'NA = {NA}, slab thickness = {thickness} $\mu$m, n0 = {n0}, n1 = {n1}')
 
-im0=ax[0].imshow(np.angle(ATF), 
+im0=ax[0].imshow(np.abs(ATF0)*np.angle(ATF0), 
                  cmap='gray',
                  extent = [np.amin(kx),np.amax(kx),np.amin(ky),np.amax(ky)],
                  origin = 'lower'
@@ -126,11 +138,11 @@ im1=ax[1].imshow(PSF,
                  )
 ax[1].set_xlabel('x ($\mu$m)')
 ax[1].set_ylabel('y ($\mu$m)')
-ax[1].set_title('PSF')
+ax[1].set_title(f'PSF at z={z:.2f}$\mu$m')
 
 # %% figure 2
-plane_y = round(Npixels/2)
-plane_z = round(Nz/2)
+plane_y = (Npixels//2)
+plane_z = (Nz//2)
 
 fig2, axs = plt.subplots(1, 2, figsize=(9, 5), tight_layout=False)
 axs[0].set_title('|PSF(x,y,0)|')  
@@ -143,16 +155,12 @@ axs[1].set_title('|PSF(x,0,z)|')
 axs[1].set(xlabel = 'x ($\mu$m)')
 axs[1].set(ylabel = 'z ($\mu$m)')
 axs[1].imshow(PSF3D[:,plane_y,:], extent = [np.amin(x)+dr,np.amax(x),np.amin(zs),np.amax(zs)])
-
+axs[1].set_aspect(1/ratio)
 
 if SaveData:
     
-    if N !=0 or M != 0:
-        note = f'aberratted_n{N}_m{M}_w{weight:.2f}'
-    else: note = None
-    
     basename = 'psf'
-    filename = '_'.join(filter(None,[basename,f'NA{NA}',f'n{n}',note]))
+    filename = '_'.join(filter(None,[basename,f'NA_{NA}',f'size_{thickness}',f'n0_{n0}',f'n1_{n1}']))
     
     from skimage.external import tifffile as tif
     psf16 = ( PSF3D * (2**16-1) / np.amax(PSF3D) ).astype('uint16') #normalize and convert to 16 bit
