@@ -2,7 +2,7 @@
 """
 Created on Tue Feb 23 17:02:23 2021
 
-Creates a 3D PSF aberrated by the presence of a slab with 
+Creates a 3D PSF aberrated by the presence of a slab at an angle
 
 @author: Andrea Bassi
 """
@@ -13,15 +13,19 @@ import matplotlib.pyplot as plt
 
 um = 1.0
 mm = 1000 * um
+deg = np.pi/180
 
-Npixels = 128 # Pixels in x,y
+Npixels = 256# Pixels in x,y
 assert Npixels % 2 == 0 # Npixels must be even 
 
 n0 = 1.33 # refractive index of the medium
-n1 = 1.47 # refractive index of the slab
-thickness = 5000 * um # slab thickness
+n1 = 1.51 # refractive index of the slab
 
-wavelength = 0.518 * um 
+thickness = 170 * um # slab thickness
+
+wavelength = 0.520 * um 
+
+alpha = 45 * deg # angle of the slab relative to the y axis
 
 NA = 0.3
 
@@ -33,8 +37,8 @@ DeltaXY = wavelength/2/NA # Diffraction limited transverse resolution
 
 DeltaZ = wavelength/n0/(1-np.sqrt(1-NA**2/n0**2)) # Diffraction limited axial resolution
 
-dr =  DeltaXY/4 # spatial sampling in xy, chosen to be 1/8 of the resolution
-ratio = 4
+dr = DeltaXY/4 # spatial sampling in xy, chosen to be a fraction of the resolution
+ratio = 2
 dz = ratio * dr # spatial sampling in z
 
 k = n0/wavelength # wavenumber
@@ -64,40 +68,49 @@ with np.errstate(invalid='ignore'):
     kz = np.sqrt(k**2-k_rho**2)
 
 # %% calculate the effect of the slab from here:"""
-theta0 = np.arcsin(NA/n0)
-theta1 = np.arcsin(NA/n1)
+maxtheta0 = np.arcsin(NA/n0)
+maxtheta1 = np.arcsin(NA/n1)
 # this is the displacement of the focus point calculated by ray-tracing 
-delta = thickness * (1- np.tan(theta1)/np.tan(theta0)) 
+# (it is the displacement at alpha==0)
+displacementZ = thickness * (1-np.tan(maxtheta1)/np.tan(maxtheta0))
+
+alpha1 = np.arcsin(n0/n1*np.sin(alpha))
+displacementY = - thickness/ np.cos(alpha1)*np.sin(alpha-alpha1)
 
 k1 = n1/n0 * k
 # note that in the slab k_rho remains the same, in agreement with Snell's law
+
+theta0 = np.arcsin(ky/k)                                                                                                                                                                                                                                                                                                                     
+
+theta1 = np.arcsin(n0/n1 * np.sin(theta0 + alpha)) - alpha
+
+ky1 = k1 * np.sin (theta1)
+
 with np.errstate(invalid='ignore'):
-    kz1 = np.sqrt( (k1)**2 - k_rho**2 ) 
+    k_rho1 = np.sqrt( kx**2 + ky1**2 )
+    kz1 = np.sqrt( k1**2 - k_rho1**2 ) 
 
 # additional phase due to propagation in the slab
-phase = 2*np.pi * (kz1 * thickness - kz * thickness) 
+phase = 2*np.pi * (kz1 - kz) * thickness / np.cos(alpha) 
 
-# Fresnel approximation
-# phase = 2* np.pi * thickness * ( k1 * (1-k_rho**2/2/k1**2) - k * (1-k_rho**2/2/k**2) )
-
-# correct for defocus, to recenter the PSF in z==0 (the new ray-tracing focus point)
-phase +=  2*np.pi * kz * delta
+# correct for defocus, to recenter the PSF in z==0 and y==0 (the new ray-tracing focus point)
+phase +=  2*np.pi * kz * displacementZ
+phase +=  2*np.pi * ky * displacementY
 
 # %% generate the pupil and the transfer functions """
 
 ATF0 = np.exp( 1.j*phase) # Amplitude Transfer Function (pupil)
-evanescent_idx = (k_rho >= k_cut_off) # indexes of the evanescent waves (kz is NaN for these indexes)
+cut_idx = (k_rho >= k_cut_off) # indexes of the evanescent waves (kz is NaN for these indexes)
+
 # evanescent_idx = np.isnan(kz)
-ATF0[evanescent_idx] = 0 # exclude evanescent k
+ATF0[cut_idx] = 0 # exclude evanescent k
                     
 PSF3D = np.zeros(((Nz,Npixels-1,Npixels-1)))
 
 for idx,z in enumerate(zs):
    
     angular_spectrum_propagator = np.exp(1.j*2*np.pi*kz*z)
-    
-    angular_spectrum_propagator[evanescent_idx] = 0 
-    
+     
     ATF = ATF0 * angular_spectrum_propagator
 
     mask_idx = (k_rho > k_cut_off)
@@ -116,13 +129,14 @@ print('The transverse resolution is:', DeltaXY ,'um')
 print('The axial resolution is:', DeltaZ ,'um') 
 print('The pixel size is:', dr ,'um') 
 print('The voxel depth is:', dz ,'um') 
-print(f'The displacement from focus is: {delta} um')
+print(f'The displacement z from the focus is: {displacementZ} um')
+print(f'The displacement y from the optical axis is: {displacementY} um')
 
 # %% figure 1
 fig1, ax = plt.subplots(1, 2, figsize=(9, 5), tight_layout=False)
 fig1.suptitle(f'NA = {NA}, slab thickness = {thickness} $\mu$m, n0 = {n0}, n1 = {n1}')
 
-im0=ax[0].imshow(np.abs(ATF0)*np.angle(ATF0), 
+im0=ax[0].imshow(np.angle(ATF0), 
                  cmap='gray',
                  extent = [np.amin(kx),np.amax(kx),np.amin(ky),np.amax(ky)],
                  origin = 'lower'
@@ -141,26 +155,44 @@ ax[1].set_ylabel('y ($\mu$m)')
 ax[1].set_title(f'PSF at z={z:.2f}$\mu$m')
 
 # %% figure 2
-plane_y = (Npixels//2)
+
+plane_x = plane_y = (Npixels//2)
 plane_z = (Nz//2)
 
-fig2, axs = plt.subplots(1, 2, figsize=(9, 5), tight_layout=False)
-axs[0].set_title('|PSF(x,y,0)|')  
+fig2, axs = plt.subplots()
+fig2.suptitle('Max intensity projection')
+
+MIPz = np.amax(PSF3D,axis=0)
+axs.set_title('|PSF(x,y)|')  
+axs.set(xlabel = 'x ($\mu$m)')
+axs.set(ylabel = 'y ($\mu$m)')
+axs.imshow(MIPz, extent = [np.amin(x)+dr,np.amax(x),np.amin(y)+dr,np.amax(y)])
+
+
+fig3, axs = plt.subplots(1, 2, figsize=(9, 5), tight_layout=False)
+fig3.suptitle('Max intensity projections')
+
+
+MIPy = np.amax(PSF3D,axis=1)
+axs[0].set_title('|PSF(x,z)|')  
 axs[0].set(xlabel = 'x ($\mu$m)')
-axs[0].set(ylabel = 'y ($\mu$m)')
-axs[0].imshow(PSF3D[plane_z,:,:], extent = [np.amin(x)+dr,np.amax(x),np.amin(y)+dr,np.amax(y)])
+axs[0].set(ylabel = 'z ($\mu$m)')
+axs[0].imshow(MIPy, extent = [np.amin(x)+dr,np.amax(x),np.amin(zs),np.amax(zs)])
+axs[0].set_aspect(1/ratio)
 
-
-axs[1].set_title('|PSF(x,0,z)|')  
-axs[1].set(xlabel = 'x ($\mu$m)')
-axs[1].set(ylabel = 'z ($\mu$m)')
-axs[1].imshow(PSF3D[:,plane_y,:], extent = [np.amin(x)+dr,np.amax(x),np.amin(zs),np.amax(zs)])
+MIPx = np.amax(PSF3D,axis=2)
+axs[1].set_title('|PSF(y,z)|')  
+axs[1].set(xlabel = 'y ($\mu$m)')
+#axs[1].set(ylabel = 'z ($\mu$m)')
+axs[1].imshow(MIPx, extent = [np.amin(x)+dr,np.amax(x),np.amin(zs),np.amax(zs)])
 axs[1].set_aspect(1/ratio)
 
 if SaveData:
     
     basename = 'psf'
-    filename = '_'.join(filter(None,[basename,f'NA_{NA}',f'size_{thickness}',f'n0_{n0}',f'n1_{n1}']))
+    filename = '_'.join(filter(None,[basename,f'NA_{NA}',
+                                     f'size_{thickness}', f'alpha_{alpha:.2f}',
+                                     f'n0_{n0}',f'n1_{n1}',f'lambda_{wavelength}']))
     
     from skimage.external import tifffile as tif
     psf16 = ( PSF3D * (2**16-1) / np.amax(PSF3D) ).astype('uint16') #normalize and convert to 16 bit
