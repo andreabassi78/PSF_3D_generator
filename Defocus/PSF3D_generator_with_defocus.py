@@ -71,19 +71,19 @@ phase = np.pi* nm_polynomial(N, M, k_rho/k_cut_off, k_theta, normalized = False)
 ATF0 = np.exp (1.j * weight * phase) # Amplitude Transfer Function
 kz = np.sqrt(k**2-k_rho**2)
 
-evanescent_idx = (k_rho >= k) # indexes of the evanescent waves (kz is NaN for these indexes)
+# evanescent_idx = (k_rho >= k) # indexes of the evanescent waves (kz is NaN for these indexes)
 # evanescent_idx = np.isnan(kz)
-                    
-PSF3D = np.zeros(((Nz,Npixels-1,Npixels-1)))
+cut_idx = (k_rho >= k_cut_off) # indexes of the evanescent waves (kz is NaN for these indexes)
 
+ATF0[cut_idx] = 0
+                   
+PSF3D = np.zeros(((Nz,Npixels-1,Npixels-1)))
 intensities = np.zeros(Nz) 
 # a constant value of intensities for every z, is an indicator that the simulation is correct.
     
 for idx,z in enumerate(zs):
    
     angular_spectrum_propagator = np.exp(1.j*2*np.pi*kz*z)
-    
-    angular_spectrum_propagator[evanescent_idx] = 0 # exclude evanescent k
     
     ATF = ATF0 * angular_spectrum_propagator
 

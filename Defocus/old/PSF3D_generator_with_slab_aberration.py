@@ -2,8 +2,7 @@
 """
 Created on Tue Feb 23 17:02:23 2021
 
-Creates a 3D PSF aberrated by the presence of an inclined slab 
-between the object and the lens. 
+Creates a 3D PSF aberrated by the presence of an inclined slab
 
 @author: Andrea Bassi
 """
@@ -16,19 +15,19 @@ um = 1.0
 mm = 1000 * um
 deg = np.pi/180
 
-Npixels = 256 # Pixels in x,y
+Npixels = 256# Pixels in x,y
 assert Npixels % 2 == 0 # Npixels must be even 
 
-n0 = 1 # refractive index of the medium
+n0 = 1.33 # refractive index of the medium
 n1 = 1.51 # refractive index of the slab
 
 thickness = 170 * um # slab thickness
 
 wavelength = 0.518 * um 
 
-alpha = 0 * deg # angle of the slab relative to the y axis
+alpha = 45 * deg # angle of the slab relative to the y axis
 
-NA = 0.28
+NA = 0.3
 
 SaveData = False
 
@@ -39,8 +38,8 @@ DeltaXY = wavelength/2/NA # Diffraction limited transverse resolution
 DeltaZ = wavelength/n0/(1-np.sqrt(1-NA**2/n0**2)) # Diffraction limited axial resolution
 
 dr = DeltaXY/4 # spatial sampling in xy, chosen to be a fraction of the resolution
-aspect_ratio = 2
-dz = aspect_ratio * dr # spatial sampling in z
+ratio = 1
+dz = ratio * dr # spatial sampling in z
 
 k = n0/wavelength # wavenumber
 
@@ -84,22 +83,18 @@ with np.errstate(invalid='ignore'):
     kz1 = np.sqrt( k1**2 - k_rho1**2 ) 
 
 # additional phase due to propagation in the slab
-phase = 2*np.pi * (kz1-kz) * thickness / np.cos(alpha) 
+phase = 2*np.pi * (kz1 - kz) * thickness / np.cos(alpha) 
 
-# Fresnel law of refraction 
-Ts01 = 2 * n0 * np.cos(theta0) / (n0* np.cos(theta0) + n1 * np.cos(theta1))
-Tp01 = 2 * n0 * np.cos(theta0) / (n0* np.cos(theta1) + n1 * np.cos(theta0))
-Ts10 = 2 * n1 * np.cos(theta1) / (n1* np.cos(theta1) + n0 * np.cos(theta0))
-Tp10 = 2 * n1 * np.cos(theta1) / (n1* np.cos(theta0) + n0 * np.cos(theta1))
+# Fresnel approximation
+# phase = -np.pi*(k_rho1**2/2/k1-k_rho**2/2/k) * thickness / np.cos(alpha) 
 
-T = (Ts01*Ts10 + Tp01*Tp10 ) / 2 # assuming equal s and p polarization components
 
 # %% calculate the displacement of the focus calculated by ray-tracing 
 
 maxtheta0 = np.arcsin(NA/n0)
 maxtheta1 = np.arcsin(NA/n1)
 
-# diplacement along z (it is calculated at alpha==0)
+# diplacement along z (it is the displacement at alpha==0)
 displacementZ = thickness * (1-np.tan(maxtheta1)/np.tan(maxtheta0))
 
 # calculate the displacement of a paraxial ray from the optical axis 
@@ -113,8 +108,7 @@ phase +=  2*np.pi * ky * displacementY
 
 # %% generate the pupil and the transfer functions """
 
-ATF0 = T * np.exp( 1.j*phase) 
-#ATF0 = np.exp( 1.j*phase) # Amplitude Transfer Function (pupil)
+ATF0 = np.exp( 1.j*phase) # Amplitude Transfer Function (pupil)
 cut_idx = (k_rho >= k_cut_off) # indexes of the evanescent waves (kz is NaN for these indexes)
 
 # evanescent_idx = np.isnan(kz)
@@ -199,7 +193,7 @@ axs[0].imshow(MIPy,
               extent = [np.amin(x)+dr,np.amax(x),np.amin(zs),np.amax(zs)],
               cmap='twilight'
               )
-axs[0].set_aspect(1/aspect_ratio)
+axs[0].set_aspect(1/ratio)
 
 MIPx = np.amax(PSF3D,axis=2)
 axs[1].set_title('|PSF(y,z)|')  
@@ -209,7 +203,7 @@ axs[1].imshow(MIPx,
               extent = [np.amin(x)+dr,np.amax(x),np.amin(zs),np.amax(zs)],
               cmap='twilight'
               )
-axs[1].set_aspect(1/aspect_ratio)
+axs[1].set_aspect(1/ratio)
 
 if SaveData:
     

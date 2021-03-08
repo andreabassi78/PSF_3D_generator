@@ -19,14 +19,14 @@ deg = np.pi/180
 Npixels = 256 # Pixels in x,y
 assert Npixels % 2 == 0 # Npixels must be even 
 
-n0 = 1 # refractive index of the medium
+n0 = 1.33 # refractive index of the medium
 n1 = 1.51 # refractive index of the slab
 
 thickness = 170 * um # slab thickness
 
 wavelength = 0.518 * um 
 
-alpha = 0 * deg # angle of the slab relative to the y axis
+alpha = 45 * deg # angle of the slab relative to the y axis
 
 NA = 0.28
 
@@ -128,8 +128,8 @@ for idx,z in enumerate(zs):
      
     ATF = ATF0 * angular_spectrum_propagator
 
-    mask_idx = (k_rho > k_cut_off)
-    ATF[mask_idx] = 0 # Creates a circular mask
+    evanescent_idx = (k_rho > k_cut_off)
+    ATF[evanescent_idx] = 0 
     
     ASF = ifftshift(ifft2(ATF)) #* k**2/f**2 # Amplitude Spread Function
     ASF = ASF[1:,1:]

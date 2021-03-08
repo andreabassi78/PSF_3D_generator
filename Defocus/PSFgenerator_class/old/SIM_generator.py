@@ -2,8 +2,7 @@
 """
 Created on Tue Feb 23 17:02:23 2021
 
-Creates a 3D PSF aberrated by the presence of an inclined slab 
-between the object and the lens. 
+Creates a 3D PSF aberrated by the presence of an inclined slab
 
 @author: Andrea Bassi
 """
@@ -11,24 +10,25 @@ between the object and the lens.
 import numpy as np
 from numpy.fft import ifft2, ifftshift, fftshift, fftfreq
 import matplotlib.pyplot as plt
+from SIM_pupil import multiple_gaussians
 
 um = 1.0
 mm = 1000 * um
 deg = np.pi/180
 
-Npixels = 256 # Pixels in x,y
+Npixels = 128# Pixels in x,y
 assert Npixels % 2 == 0 # Npixels must be even 
 
-n0 = 1 # refractive index of the medium
-n1 = 1.51 # refractive index of the slab
+n0 = 1.33 # refractive index of the medium
+n1 = 1.338 # refractive index of the slab
 
 thickness = 170 * um # slab thickness
 
 wavelength = 0.518 * um 
 
-alpha = 0 * deg # angle of the slab relative to the y axis
+alpha = 45 * deg # angle of the slab relative to the y axis
 
-NA = 0.28
+NA = 0.5
 
 SaveData = False
 
@@ -38,9 +38,9 @@ DeltaXY = wavelength/2/NA # Diffraction limited transverse resolution
 
 DeltaZ = wavelength/n0/(1-np.sqrt(1-NA**2/n0**2)) # Diffraction limited axial resolution
 
-dr = DeltaXY/4 # spatial sampling in xy, chosen to be a fraction of the resolution
-aspect_ratio = 2
-dz = aspect_ratio * dr # spatial sampling in z
+dr = DeltaXY/2 # spatial sampling in xy, chosen to be a fraction of the resolution
+ratio = 2
+dz = ratio * dr # spatial sampling in z
 
 k = n0/wavelength # wavenumber
 
@@ -72,34 +72,29 @@ with np.errstate(invalid='ignore'):
 
 k1 = n1/n0 * k
 # note that in the slab k_rho remains the same, in agreement with Snell's law
+with np.errstate(invalid='ignore'):   
+    theta0 = np.arcsin(ky/k)                                                                                                                                                                                                                                                                                                                     
 
-theta0 = np.arcsin(ky/k)                                                                                                                                                                                                                                                                                                                     
+    theta1 = np.arcsin(n0/n1 * np.sin(theta0 + alpha)) - alpha
 
-theta1 = np.arcsin(n0/n1 * np.sin(theta0 + alpha)) - alpha
+    ky1 = k1 * np.sin (theta1)
 
-ky1 = k1 * np.sin (theta1)
-
-with np.errstate(invalid='ignore'):
     k_rho1 = np.sqrt( kx**2 + ky1**2 )
     kz1 = np.sqrt( k1**2 - k_rho1**2 ) 
 
 # additional phase due to propagation in the slab
-phase = 2*np.pi * (kz1-kz) * thickness / np.cos(alpha) 
+phase = 2*np.pi * (kz1 - kz) * thickness / np.cos(alpha) 
 
-# Fresnel law of refraction 
-Ts01 = 2 * n0 * np.cos(theta0) / (n0* np.cos(theta0) + n1 * np.cos(theta1))
-Tp01 = 2 * n0 * np.cos(theta0) / (n0* np.cos(theta1) + n1 * np.cos(theta0))
-Ts10 = 2 * n1 * np.cos(theta1) / (n1* np.cos(theta1) + n0 * np.cos(theta0))
-Tp10 = 2 * n1 * np.cos(theta1) / (n1* np.cos(theta0) + n0 * np.cos(theta1))
+# Fresnel approximation
+# phase = -np.pi*(k_rho1**2/2/k1-k_rho**2/2/k) * thickness / np.cos(alpha) 
 
-T = (Ts01*Ts10 + Tp01*Tp10 ) / 2 # assuming equal s and p polarization components
 
 # %% calculate the displacement of the focus calculated by ray-tracing 
 
 maxtheta0 = np.arcsin(NA/n0)
 maxtheta1 = np.arcsin(NA/n1)
 
-# diplacement along z (it is calculated at alpha==0)
+# diplacement along z (it is the displacement at alpha==0)
 displacementZ = thickness * (1-np.tan(maxtheta1)/np.tan(maxtheta0))
 
 # calculate the displacement of a paraxial ray from the optical axis 
@@ -112,13 +107,19 @@ phase +=  2*np.pi * kz * displacementZ
 phase +=  2*np.pi * ky * displacementY
 
 # %% generate the pupil and the transfer functions """
+source_rho = [0.9, 0.9, 0.9] 
+source_theta = [0, 2*np.pi/3, 4*np.pi/3]
+eff_waist = 0.01
 
-ATF0 = T * np.exp( 1.j*phase) 
-#ATF0 = np.exp( 1.j*phase) # Amplitude Transfer Function (pupil)
+print(f'{eff_waist =}')
+
+ATF0 = multiple_gaussians(kx/k_cut_off, ky/k_cut_off, eff_waist, eff_waist*10, source_rho, source_theta)
+
+ATF0 *= np.exp( 1.j*phase) # Amplitude Transfer Function (pupil)
 cut_idx = (k_rho >= k_cut_off) # indexes of the evanescent waves (kz is NaN for these indexes)
 
 # evanescent_idx = np.isnan(kz)
-ATF0[cut_idx] = 0 # exclude evanescent k
+ATF0[cut_idx] = 0 # exclude k above the 
                     
 PSF3D = np.zeros(((Nz,Npixels-1,Npixels-1)))
 
@@ -151,14 +152,14 @@ print(f'The displacement y from the optical axis is: {displacementY} um')
 fig1, ax = plt.subplots(1, 2, figsize=(9, 5), tight_layout=False)
 fig1.suptitle(f'NA = {NA}, slab thickness = {thickness} $\mu$m, n0 = {n0}, n1 = {n1}')
 
-im0=ax[0].imshow(np.angle(ATF0), 
+im0=ax[0].imshow(np.abs(ATF0), 
                  cmap='gray',
                  extent = [np.amin(kx),np.amax(kx),np.amin(ky),np.amax(ky)],
                  origin = 'lower'
                  )
 ax[0].set_xlabel('kx (1/$\mu$m)')
 ax[0].set_ylabel('ky (1/$\mu$m)')
-ax[0].set_title('Pupil (phase)')
+ax[0].set_title('Pupil (real part)')
 fig1.colorbar(im0,ax = ax[0])
 im1=ax[1].imshow(PSF,
                  cmap='gray',
@@ -171,45 +172,44 @@ ax[1].set_title(f'PSF at z={z:.2f}$\mu$m')
 
 # %% figure 2
 
-plane_x = plane_y = (Npixels//2)
-plane_z = (Nz//2)
+idx_x = idx_y = (Npixels//2)
+idx_z = (Nz//2)
 
 fig2, axs = plt.subplots()
 fig2.suptitle('Max intensity projection')
 
-MIPz = np.amax(PSF3D,axis=0)
+planez = PSF3D[idx_z,:,:]
 axs.set_title('|PSF(x,y)|')  
 axs.set(xlabel = 'x ($\mu$m)')
 axs.set(ylabel = 'y ($\mu$m)')
-axs.imshow(MIPz, 
+axs.imshow(planez, 
            extent = [np.amin(x)+dr,np.amax(x),np.amin(y)+dr,np.amax(y)],
-           cmap='twilight'
+           cmap='hot'
            )
 
 
 fig3, axs = plt.subplots(1, 2, figsize=(9, 5), tight_layout=False)
 fig3.suptitle('Max intensity projections')
 
-
-MIPy = np.amax(PSF3D,axis=1)
+planey = PSF3D[:,idx_y,:]
 axs[0].set_title('|PSF(x,z)|')  
 axs[0].set(xlabel = 'x ($\mu$m)')
 axs[0].set(ylabel = 'z ($\mu$m)')
-axs[0].imshow(MIPy, 
+axs[0].imshow(planey, 
               extent = [np.amin(x)+dr,np.amax(x),np.amin(zs),np.amax(zs)],
-              cmap='twilight'
+              cmap='hot'
               )
-axs[0].set_aspect(1/aspect_ratio)
+#axs[0].set_aspect(1/ratio)
 
-MIPx = np.amax(PSF3D,axis=2)
+planex = PSF3D[:,:,idx_x]
 axs[1].set_title('|PSF(y,z)|')  
 axs[1].set(xlabel = 'y ($\mu$m)')
 #axs[1].set(ylabel = 'z ($\mu$m)')
-axs[1].imshow(MIPx,
+axs[1].imshow(planex,
               extent = [np.amin(x)+dr,np.amax(x),np.amin(zs),np.amax(zs)],
-              cmap='twilight'
+              cmap='hot'
               )
-axs[1].set_aspect(1/aspect_ratio)
+#axs[1].set_aspect(1/ratio)
 
 if SaveData:
     
