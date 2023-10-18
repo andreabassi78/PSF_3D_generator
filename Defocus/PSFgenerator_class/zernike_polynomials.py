@@ -59,7 +59,7 @@ def nm_polynomial(n, m, rho, theta, normalized=True):
     if normalized:
         prefac = 1. / nm_normalization(n, m)
     else:
-        prefac = 1.
+        prefac = 0.5
     if m >= 0:
         return prefac * radial * np.cos(m0 * theta)
     else:
@@ -76,21 +76,21 @@ if __name__ == "__main__":
     rho = np.sqrt(X**2 + Y**2)
     theta = np.arctan2(Y,X)
     
-    n = 5  # Zernike radial order 
-    m = 1 # Zernike azimutal frequency
+    n = 4  # Zernike radial order 
+    m = 2 # Zernike azimutal frequency
     
-    Z = nm_polynomial(n, m, rho, theta, normalized = False) 
+    Z = nm_polynomial(n, m, rho, theta, normalized = True) 
     
     fig1 = plt.figure(figsize=(9, 9))
-    
-    plt.title(f'Zernike polynomial of order ({n},{m})')
-    
     plt.imshow(Z, 
                interpolation='none',
                cmap=cm.gray,
                origin='lower',
                extent = [-R,R,-R,R]
                )
-    
+    plt.title(f'Zernike polynomial of order ({n},{m})')
     plt.colorbar()
-   
+    
+    fig2 =plt.figure(figsize=(9, 9))
+    plt.plot(np.linspace(-R,R,Npixels),Z[:, Npixels//2])
+    plt.title(f'Zernike polynomial of order ({n},{m})')

@@ -6,7 +6,7 @@ Created on Tue Feb 23 17:02:23 2021
 """
 
 import numpy as np
-from numpy.fft import ifft2, ifftshift, fftshift, fftfreq
+from numpy.fft import fft2, ifftshift, fftshift, fftfreq
 import matplotlib.pyplot as plt
 from zernike_polynomials import nm_polynomial
 from SIM_pupil import multiple_gaussians
@@ -15,10 +15,9 @@ class PSF_generator():
     '''
     Class to generate 3D Point Spread Functions
     with different pupils and various abberrations between the object and the lens. 
-    
     '''
     
-    def __init__(self, NA, n, wavelength, Nxy, Nz, over_sampling=4, aspect_ratio=1):
+    def __init__(self, NA, n, wavelength, Nxy, Nz, **kwargs):
         '''
         NA: numerical aperture
         n: refractive index
@@ -29,7 +28,7 @@ class PSF_generator():
         aspect_ratio: ratio between z and xy sampling
         
         '''
-        assert Nxy % 2 == 0, "XY number of pixels must be even" 
+        assert Nxy % 2 == 1, "XY number of pixels must be odd" 
         
         self.NA = NA # Numerical aperture
         self.n = n # refraction index at the object
@@ -40,11 +39,18 @@ class PSF_generator():
         
         DeltaXY = wavelength/2/NA # Diffraction limited transverse resolution
         
-        self.dr = DeltaXY/over_sampling 
-        # spatial sampling in xy, chosen to be a fraction (over_sampling) of the resolution
-        self.aspect_ratio = aspect_ratio
-        self.dz = aspect_ratio * self.dr # spatial sampling in z
+        if not 'dr' in kwargs:
+            over_sampling = 4 # spatial sampling in xy, chosen to be a fraction (over_sampling) of the resolution
+            self.dr = DeltaXY/over_sampling 
+        else: 
+            self.dr = kwargs['dr']
         
+        if not 'dz' in kwargs:
+            aspect_ratio = 4
+            self.dz = aspect_ratio * self.dr # spatial sampling in z
+        else: 
+            self.dz = kwargs['dz']
+       
         # generate the real  space (xy is used only for visulaization) 
         # x = y = fftshift(fftfreq(Npixels, dk))
         self.x = self.y = self.dr * (np.arange(Nxy) - Nxy // 2)
@@ -56,7 +62,8 @@ class PSF_generator():
         self.generate_kspace()
         
     def generate_kspace(self):
-        """ Generates the k-space used to define the transfer functions
+        """
+        Generates the k-space used to define the transfer functions
         """
         kx_lin = fftshift(fftfreq(self.Nxy, self.dr))
         ky_lin = fftshift(fftfreq(self.Nxy, self.dr))
@@ -78,7 +85,7 @@ class PSF_generator():
         self.amplitude = np.ones_like(self.kz)
         
         self.ATF0 = np.zeros_like(self.kz) 
-        self.PSF3D = np.zeros(((self.Nz,self.Nxy-1,self.Nxy-1)))
+        self.PSF3D = np.zeros(((self.Nz,self.Nxy,self.Nxy)))
 
     def add_slab_scalar(self, n1, thickness, alpha):
         """ 
@@ -155,13 +162,26 @@ class PSF_generator():
         # remove piston
         phase = self.phase
         phase = phase[np.isfinite(phase)]
-        self.phase= (self.phase - np.min(phase))
+        self.phase = (self.phase - np.min(phase)) 
+        
+        
+    def add_cylindrical_lens(self, f_cyl, f):
+        """introduce astigmatism placing a thin lens in the pupil
+        which produces a quadratic phase in direction x.
+        f_cyl is the focal length of the cylindrical lens
+        f is the focal length of the objective lens 
+        """
+        self.phase += 2*np.pi * (self.kx)**2 /2/f_cyl * f
         
         
     def add_Zernike_aberration(self, N, M, weight):
-        self.phase += weight*nm_polynomial(N, M, 
+        # weight of the polynomials in units of lambda (weight 1 means  wavefront abberated of lamba/2)
+        self.N = N
+        self.M = M
+        self.weight = weight
+        self.phase += 2* np.pi* weight*nm_polynomial(N, M, 
                                            self.k_rho/self.k_cut_off, 
-                                           self.k_theta, normalized = True
+                                           self.k_theta, normalized = False
                                            ) 
         
     def generate_pupil(self):
@@ -175,9 +195,10 @@ class PSF_generator():
         self.ATF0 = ATF0
         
     def add_Ndimensional_SIM_pupil(self,     
-                     kr = 0.7,
+                     kr = 0.5,
                      waist = 0.01,
-                     source_num = 3
+                     source_num = 3,
+                     add_cw = False
                      ):
         ''' Generates the pupil for mutlidimensional SIM microscopy
             (typically 2,3 or 4 sources are used)
@@ -187,13 +208,42 @@ class PSF_generator():
                 relative to the  cutoff frequency self.k_cut_off
             
             '''
-        NumSources = 3    
-        source_theta = 2*np.pi/source_num * np.arange(source_num)
-        source_kr = [kr] * NumSources
+
+        source_theta = list(2*np.pi/source_num * np.arange(source_num))
+        source_kr = [kr] * source_num # list with NumSources elements
+        source_amp = [1] * source_num # list with NumSources elements
+        
+        if add_cw:
+            source_kr.append(0.)
+            source_theta.append(0.)
+            source_amp.append(sum(source_amp))
+        
         self.amplitude *= multiple_gaussians(self.kx/self.k_cut_off,
                                   self.ky/self.k_cut_off,
                                   waist, waist,
-                                  source_kr, source_theta)  
+                                  source_kr, source_amp, source_theta)
+        
+        
+    def add_chirped_SIM_pupil(self, kmin = 3, deltak = 1):
+         R = 1 # extent of the xy space
+         x = y = np.linspace(-R, +R, self.Nxy)
+         X, Y = np.meshgrid(x,y)
+         Z = np.cos(2*np.pi*(kmin+deltak*np.abs(Y)) *X )**2
+         
+         fftZ = fftshift(fft2(ifftshift(Z)))**2
+         
+         self.amplitude *= np.abs(fftZ)
+         plt.figure(figsize=(9, 9), dpi=300)
+         plt.imshow(Z, 
+                    interpolation='none',
+                    origin='lower',
+                    )
+         
+         plt.colorbar()
+    
+
+
+     
     
     def add_lightsheet_pupil(self, 
                      waistx = 0.015,
@@ -213,6 +263,17 @@ class PSF_generator():
         
         self.amplitude *=beam
         
+        
+    def add_conical_pupil(self, thickness , n1 = 1.51):
+        ''' Simulates the presence of an axicon in the pupil 
+        alpha: angle of the cone relative to the xy plane
+        '''
+        
+        delta = 2*np.pi * thickness * (n1 - self.n) / self.wavelength
+        ax_phase = delta * (1 - self.k_rho / self.k_cut_off) 
+        self.phase += ax_phase 
+        
+        
     def add_lattice_pupil(self, 
                      cutin = 0.84,
                      cutout = 1,
@@ -227,7 +288,6 @@ class PSF_generator():
         waistx: of the gaussian source along x
         waist_ratio: ratio between the waist along y and the one along x
         source_num: order of the lattice
-        
         '''
         
         source_rho = [(cutout+cutin)/2] * source_num # repeat list source_num times
@@ -246,7 +306,11 @@ class PSF_generator():
         
         self.amplitude *=beams*mask
                 
-    def generate_3D_PSF(self): 
+    def generate_3D_PSF(self):
+        ''' core function of the class.
+        Generates the PSF by Fourier Transforming the Amplitude Tranfer Function
+        calculated at different z with the Rayleigh-Sommerfield angular spectrum 
+        '''
         
         ATF0 = self.ATF0
         
@@ -259,14 +323,14 @@ class PSF_generator():
             evanescent_idx = (self.k_rho > self.k)
             ATF[evanescent_idx] = 0 
             
-            ASF = ifftshift(ifft2(ATF)) #* k**2/f**2 # Amplitude Spread Function
-            ASF = ASF[1:,1:]
+            ASF = fftshift(fft2(ifftshift(ATF))) #* k**2/f**2 # Amplitude Spread Function
+            # ASF = ASF[1:,1:]
             
             PSF = np.abs(ASF)**2 # Point Spread Function
             
             self.PSF3D[idx,:,:] = PSF
        
-    def _calculateRMS(self):
+    def calculateRMS(self):
         '''calculates the RMS wavefron error
         For Zernike abberrations it is the weight of the 
         rms == 1 indicates 1-wavelength wavefront error 
@@ -277,7 +341,8 @@ class PSF_generator():
         #m = np.zeros_like(phase)
         phase[cut_idx] = 0
         phase = phase[np.isfinite(phase)]
-        rms = np.sqrt(np.sum(phase**2)/area) 
+        mean_phase = np.mean(phase)
+        rms = np.sqrt(np.sum((phase-mean_phase)**2)/area) 
         return(rms)
        
     def print_values(self):
@@ -301,8 +366,7 @@ class PSF_generator():
         """ 
         Shows the Amplitude Transfer Function (pupil) in amplitude and phase
         """
-        
-        fig, ax = plt.subplots(1, 2, figsize=(12, 6), tight_layout=False)
+        fig, ax = plt.subplots(1, 2, figsize=(12, 6), tight_layout=False, dpi=300)
         sup_title =  f'NA = {self.NA}, n = {self.n}'
         if hasattr(self,'thickness'):
              sup_title += f', slab thickness = {self.thickness} $\mu$m, n1 = {self.n1}, alpha = {self.alpha:.02f}'
@@ -320,20 +384,21 @@ class PSF_generator():
             im0=ax[idx].imshow(data, 
                              cmap='pink',
                              extent = [np.amin(self.kx),np.amax(self.kx),np.amin(self.ky),np.amax(self.ky)],
-                             origin = 'lower'
+                             origin = 'lower',
+                             interpolation = 'none'
                              )
             ax[idx].set_xlabel('kx (1/$\mu$m)')
             ax[idx].set_ylabel('ky (1/$\mu$m)')
             ax[idx].set_title(title)
-            fig.colorbar(im0,ax = ax[idx])
-    
-    def show_PSF_projections(self, aspect_ratio, mode ='MIP'):
+            fig.colorbar(im0,ax = ax[idx])       
+       
+    def show_PSF_projections(self, aspect_ratio, mode ='mip'):
         """ Shows the 3D PSF in 3 orthogonal views
         Aspect ratio: between the z axis and the other axes scale
         mode: 'MIP' or 'plane': MAximum intensity projection or plane incercepting the origin
         """
        
-        fig, axs = plt.subplots(1, 3, figsize=(12,6), tight_layout=False)
+        fig, axs = plt.subplots(1, 3, figsize=(12,6), tight_layout=False, dpi=300)
         sup_title =  f'NA = {self.NA}, n = {self.n}'
         if hasattr(self,'thickness'):
              sup_title += f', slab thickness = {self.thickness} $\mu$m, n1 = {self.n1}, alpha = {self.alpha:.02f}'
@@ -343,24 +408,29 @@ class PSF_generator():
         
         for idx, labels in enumerate(label_list):
 
-            if mode =='MIP':
+            if mode == 'mip':
                 # create maximum intensity projection
-                MIP = np.amax(self.PSF3D,axis=idx)
+                MIP = np.amax(self.PSF3D, axis=idx)
                 im_to_show = MIP
-            elif mode =='plane':
+            
+            elif mode == 'sum':
+                # create average intensity projection
+                MIP = np.mean(self.PSF3D, axis=idx)
+                im_to_show = MIP    
+                
+            elif mode == 'plane':
                 PSF = self.PSF3D
                 Nz,Ny,Nx = PSF.shape
                 Nlist = [Nz,Ny,Nx]
                 im_to_show = PSF.take(indices=Nlist[idx]//2 , axis=idx)
             else:
-                raise(ValueError, 'Please specify PSF showing mode' )
+                raise(ValueError, 'Please specify a valid PSF showing mode (mip,plane,sum)' )
  
             values0 = getattr(self, labels[0])
             values1 = getattr(self, labels[1])
-            delta0 = self.dr
-            delta1 = self.dr if idx==0 else 0
-            extent = [np.amin(values0)+delta0, np.amax(values0),
-                      np.amin(values1)+delta1, np.amax(values1)]
+    
+            extent = [np.amin(values0), np.amax(values0),
+                      np.amin(values1), np.amax(values1)]
             
             if idx == 0:
                 vmin = np.amin(im_to_show)
@@ -380,7 +450,62 @@ class PSF_generator():
             
             if labels[1] == 'z': 
                 axs[idx].set_aspect(1/aspect_ratio)
-               
+        
+    def plot_phase(self):
+        '''
+        plot the phase a the pupil along x and y
+        '''
+        fig, ax = plt.subplots(1, 2, figsize=(12, 6), tight_layout=False, dpi=300)
+        sup_title =  f'NA = {self.NA}, n = {self.n}'
+        if hasattr(self,'thickness'):
+             sup_title += f', slab thickness = {self.thickness} $\mu$m, n1 = {self.n1}, alpha = {self.alpha:.02f}'
+        fig.suptitle(sup_title)
+        phase = self.phase
+        s = phase.shape
+        ax[0].plot( self.kx[s[0]//2,:], phase[s[0]//2,:] )
+        ax[0].set_xlabel('kx (1/$\mu$m)')
+        ax[0].set_ylabel('phase (rad)')
+        
+        ax[1].plot( self.ky[:,s[1]//2], phase[:,s[1]//2] )
+        ax[1].set_xlabel('ky (1/$\mu$m)')
+        ax[1].set_ylabel('phase (rad)')
+        
+        
+    def plot_psf_profile(self):
+        '''
+        plot the phase a the pupil along x and y
+        '''
+        fig, ax = plt.subplots(1, 2, figsize=(12, 6), tight_layout=False, dpi=300)
+        sup_title =  f'NA = {self.NA}, n = {self.n}'
+        if hasattr(self,'thickness'):
+             sup_title += f', slab thickness = {self.thickness} $\mu$m, n1 = {self.n1}, alpha = {self.alpha:.02f}'
+        fig.suptitle(sup_title)
+        PSF = self.PSF3D
+        Nz, Ny, Nx = PSF.shape
+    
+        # psf_to_show = PSF.take(indices=Nlist[idx]//2 , axis=idx)
+        psf_to_show_x = PSF[Nz//2,Ny//2,:]
+        psf_to_show_z = PSF[:,Ny//2,Nx//2]
+        
+        ax[0].plot( self.x, psf_to_show_x,
+                   linewidth=1.5)
+        ax[0].set_xlabel('x ($\mu$m)')
+        ax[0].set_ylabel('PSF')
+        ax[0].grid()
+        DeltaX = self.wavelength/self.NA/2 # Abbe resolution
+        ax[0].plot(np.array([0.,DeltaX,1.22*DeltaX]),
+                   np.array([0.,0.,0.]),
+                   'o', markersize=2)
+                  
+        
+        ax[1].plot( self.z, psf_to_show_z,
+                   linewidth=1.5)
+        ax[1].set_xlabel('z ($\mu$m)')
+        # ax[1].set_ylabel('PSF')    
+        ax[1].grid()
+        DeltaZ = self.wavelength/self.n/(1-np.sqrt(1-self.NA**2/self.n**2)) # Diffraction limited axial resolution
+        ax[1].plot(DeltaZ, 0., 'o', markersize=2)
+        
     def save_data(self):
         
         basename = 'psf'
@@ -397,7 +522,7 @@ class PSF_generator():
         
         from skimage.external import tifffile as tif
         psf16 = ( self.PSF3D * (2**16-1) / np.amax(self.PSF3D) ).astype('uint16') #normalize and convert to 16 bit
-        psf16.shape = 1, self.Nz, 1, self.Nxy-1, self.Nxy-1, 1 # dimensions in TZCYXS order
+        psf16.shape = 1, self.Nz, 1, self.Nxy, self.Nxy, 1 # dimensions in TZCYXS order
         
         tif.imsave(filename+'.tif', psf16, imagej=True, resolution = (1.0/self.dr, 1.0/self.dr),
                     metadata={'spacing': self.dz, 'unit': 'um'})
@@ -408,32 +533,46 @@ if __name__ == '__main__':
     mm = 1000 * um
     deg = np.pi/180
     
-    NA = 0.3
+    NA = 0.28
     
-    wavelength = 0.518 * um 
-    n0 = 1.33 # refractive index of the medium
+    wavelength = 0.5 * um 
+    n0 = 1.00 # refractive index of the medium
     
-    n1 = 1.5 # refractive index of the slab
-    thickness = 170 * um # slab thickness
-    alpha = 45 * deg # angle of the slab relative to the y axis
+    n1 = 1.51 # refractive index of the slab
+    thickness = 10000 * um # slab thickness
+    alpha = 0 * deg # angle of the slab relative to the y axis
     
     SaveData = False
     
-    Nxy = 256 
-    Nz = 256
+    Nxy = 231
     
-    aspect_ratio = 2 # ratio between z and xy sampling
+    Nz = 511
+     
+    dr = 0.2 * um
+    
+    dz = 0.5 * um
     
     gen = PSF_generator(NA, n0, wavelength, Nxy, Nz, 
-                        over_sampling = 4, aspect_ratio=aspect_ratio)
+                        dr = dr, dz = dz
+                        )
     
-    # gen.add_Ndimensional_SIM_pupil()
+    
+    # gen.add_Ndimensional_SIM_pupil(kr = 0.2,
+    #                                 waist = 0.01,
+    #                                 source_num = 4,
+    #                                 add_cw = True)
+    #gen.add_chirped_SIM_pupil()
     # gen.add_lattice_pupil()
     # gen.add_lightsheet_pupil()
+    
     gen.add_slab_scalar(n1, thickness, alpha)
+    
+    
     # gen.add_slab_vectorial(n1, thickness, alpha)
-    # gen.add_Zernike_aberration(5, 1, weight=0.5)
-
+    # gen.add_Zernike_aberration(2, 2, weight=0.5)
+    # gen.add_conical_pupil(0.06*mm)
+    
+    # gen.add_cylindrical_lens(f_cyl=-40, f=20)
     
     gen.generate_pupil()
     gen.generate_3D_PSF()
@@ -442,7 +581,9 @@ if __name__ == '__main__':
     gen.print_values()
     
     gen.show_pupil()
-    gen.show_PSF_projections(aspect_ratio=1, mode='MIP') 
-            
+    #gen.plot_phase()
+    gen.show_PSF_projections(aspect_ratio=4, mode ='plane') 
+    gen.plot_psf_profile()
+        
     if SaveData:
         gen.save_data()            

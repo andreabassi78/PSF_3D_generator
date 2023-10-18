@@ -18,11 +18,11 @@ mm = 1000*um
 Npixels = 256 # Pixels in x,y
 assert Npixels%2 == 0 # Npixels must be even 
 
-n = 1.33 # refractive index
+n = 1 # refractive index
 
 wavelength = 0.520*um 
 
-NA = 0.3
+NA = 0.5
 
 dr = 0.1629073 * um # spatial sampling in xy
 dz = 0.1629073* um
